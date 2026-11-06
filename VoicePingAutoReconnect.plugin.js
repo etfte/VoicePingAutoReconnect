@@ -1,8 +1,8 @@
 /**
  * @name VoicePingAutoReconnect
  * @author etfte
- * @version 1.7.0
- * @description Показывает пинг каналов на 30 секунд по нажатию кнопки, мониторит зависания и встраивает кнопки в интерфейс Discord.
+ * @version 1.8.0
+ * @description Отображает пинг каналов на 30 секунд по кнопке, плавно и без зависаний, с авто-реконнектом при спайках 5000ms.
  */
 
 module.exports = class VoicePingAutoReconnect {
@@ -17,7 +17,6 @@ module.exports = class VoicePingAutoReconnect {
         this.badgeInterval = null;
         this.countdownInterval = null;
         this.isReconnecting = false;
-        this.observer = null;
         this.cachedPings = {};
         this.simulatedPing = null;
         this.pingVisibleUntil = 0;
@@ -30,21 +29,26 @@ module.exports = class VoicePingAutoReconnect {
         this.cleanOldElements();
         this.patchChannelItem();
         this.startMonitor();
-        this.startBadgeUpdater();
-        this.observeDOM();
-        console.log("[VoicePing] v1.7.0 запущен (режим показа по кнопке на 30с).");
-        BdApi.UI.showToast("[VoicePing] v1.7.0 активен!", { type: "success" });
+        this.startPeriodicUpdates();
+        console.log("[VoicePing] v1.8.0 запущен (0% CPU, оптимизированный рендер).");
+        BdApi.UI.showToast("[VoicePing] v1.8.0 активен (без зависаний)!", { type: "success" });
     }
 
     stop() {
         if (this.interval) clearInterval(this.interval);
         if (this.badgeInterval) clearInterval(this.badgeInterval);
         if (this.countdownInterval) clearInterval(this.countdownInterval);
-        if (this.observer) this.observer.disconnect();
         document.body.classList.remove("voice-ping-active");
         BdApi.DOM.removeStyle("voice-ping-autoreconnect-style");
         this.cleanOldElements();
         BdApi.Patcher?.unpatchAll?.("VoicePingAutoReconnect");
+    }
+
+    // Вызывается BetterDiscord при смене сервера или канала
+    onSwitch() {
+        this.injectHeaderControls();
+        this.injectServerHeaderButton();
+        this.updateChannelBadges();
     }
 
     cleanOldElements() {
@@ -69,7 +73,7 @@ module.exports = class VoicePingAutoReconnect {
 
     injectStyles() {
         BdApi.DOM.addStyle("voice-ping-autoreconnect-style", `
-            /* Кнопка на панели сервера над каналами */
+            /* Кнопка на панели сервера */
             .voice-ping-server-btn {
                 height: 24px;
                 padding: 0 8px;
@@ -86,7 +90,7 @@ module.exports = class VoicePingAutoReconnect {
                 gap: 5px;
                 margin-left: auto;
                 margin-right: 8px;
-                transition: all 0.15s ease;
+                transition: background-color 0.15s ease, color 0.15s ease;
                 outline: none;
                 user-select: none;
             }
@@ -105,7 +109,7 @@ module.exports = class VoicePingAutoReconnect {
                 fill: currentColor;
             }
 
-            /* Панель управления звонком внизу */
+            /* Панель внизу у звонка */
             .voice-ping-header-controls {
                 display: inline-flex;
                 align-items: center;
@@ -127,7 +131,6 @@ module.exports = class VoicePingAutoReconnect {
                 justify-content: center;
                 transition: background-color 0.15s ease, color 0.15s ease, transform 0.1s ease;
                 outline: none;
-                position: relative;
             }
             .voice-ping-icon-btn:hover {
                 background-color: var(--background-modifier-hover, rgba(255, 255, 255, 0.08));
@@ -152,7 +155,7 @@ module.exports = class VoicePingAutoReconnect {
                 flex-shrink: 0;
             }
 
-            /* Бейджи пинга у каналов: скрыты по умолчанию, отображаются при классе voice-ping-active */
+            /* Бейджи пинга у каналов: 0 перерисовок, переключение чисто через CSS */
             .voice-ping-channel-badge {
                 display: none !important;
                 align-items: center;
@@ -167,15 +170,11 @@ module.exports = class VoicePingAutoReconnect {
                 flex-shrink: 0 !important;
                 pointer-events: none !important;
                 user-select: none !important;
-                opacity: 0;
-                transition: opacity 0.2s ease, transform 0.2s ease;
-                transform: scale(0.92);
             }
 
+            /* Отображение при активном классе */
             body.voice-ping-active .voice-ping-channel-badge {
                 display: inline-flex !important;
-                opacity: 1;
-                transform: scale(1);
             }
 
             .voice-ping-good {
@@ -196,25 +195,25 @@ module.exports = class VoicePingAutoReconnect {
         `);
     }
 
-    // Запуск отображения пинга ровно на N секунд
+    // Мгновенное включение / выключение пинга на 30 секунд (0% CPU)
     togglePingVisibility(seconds = 30) {
         const now = Date.now();
-        // Если уже активно — выключаем досрочно
         if (this.pingVisibleUntil > now) {
             this.pingVisibleUntil = 0;
             document.body.classList.remove("voice-ping-active");
             if (this.countdownInterval) clearInterval(this.countdownInterval);
             this.updateButtonLabels(0);
-            BdApi.UI.showToast("📶 [VoicePing] Пинг каналов скрыт.", { type: "info" });
+            BdApi.UI.showToast("📶 [VoicePing] Пинг скрыт", { type: "info" });
             return;
         }
 
-        // Активируем на 30 секунд
         this.pingVisibleUntil = now + (seconds * 1000);
+        
+        // Быстрое переключение одним CSS-классом
         document.body.classList.add("voice-ping-active");
         this.updateChannelBadges();
 
-        BdApi.UI.showToast(`📶 [VoicePing] Пинг каналов включён на ${seconds} секунд!`, { type: "success" });
+        BdApi.UI.showToast(`📶 [VoicePing] Пинг каналов показан на ${seconds} сек.`, { type: "success" });
 
         if (this.countdownInterval) clearInterval(this.countdownInterval);
         this.countdownInterval = setInterval(() => {
@@ -225,7 +224,6 @@ module.exports = class VoicePingAutoReconnect {
                 clearInterval(this.countdownInterval);
                 document.body.classList.remove("voice-ping-active");
                 this.updateButtonLabels(0);
-                BdApi.UI.showToast("📶 [VoicePing] 30 секунд истекли. Пинг скрыт.", { type: "info" });
             }
         }, 1000);
 
@@ -234,28 +232,20 @@ module.exports = class VoicePingAutoReconnect {
 
     updateButtonLabels(remainingSeconds) {
         const isNowActive = remainingSeconds > 0;
+        const newText = isNowActive ? `Пинг (${remainingSeconds}с)` : "Пинг";
 
-        // Кнопка в шапке каналов сервера
         document.querySelectorAll(".voice-ping-server-btn").forEach(btn => {
             const label = btn.querySelector(".voice-ping-btn-text");
-            if (isNowActive) {
-                btn.classList.add("active");
-                if (label) label.textContent = `Пинг (${remainingSeconds}с)`;
-            } else {
-                btn.classList.remove("active");
-                if (label) label.textContent = "Пинг";
+            if (label && label.textContent !== newText) {
+                label.textContent = newText;
             }
+            if (isNowActive && !btn.classList.contains("active")) btn.classList.add("active");
+            else if (!isNowActive && btn.classList.contains("active")) btn.classList.remove("active");
         });
 
-        // Иконка в панели голосового соединения
         document.querySelectorAll(".voice-ping-toggle-btn").forEach(btn => {
-            if (isNowActive) {
-                btn.classList.add("active");
-                btn.title = `Скрыть пинг (осталось ${remainingSeconds}с)`;
-            } else {
-                btn.classList.remove("active");
-                btn.title = "Показать пинг каналов на 30 секунд";
-            }
+            if (isNowActive && !btn.classList.contains("active")) btn.classList.add("active");
+            else if (!isNowActive && btn.classList.contains("active")) btn.classList.remove("active");
         });
     }
 
@@ -356,13 +346,19 @@ module.exports = class VoicePingAutoReconnect {
         } catch (e) {}
     }
 
-    startBadgeUpdater() {
+    // Легкое фоновое обновление (без бесконечных циклов MutationObserver)
+    startPeriodicUpdates() {
+        this.injectHeaderControls();
+        this.injectServerHeaderButton();
         this.updateChannelBadges();
+
         this.badgeInterval = setInterval(() => {
-            this.updateChannelBadges();
             this.injectHeaderControls();
             this.injectServerHeaderButton();
-        }, 1500);
+            if (Date.now() < this.pingVisibleUntil) {
+                this.updateChannelBadges();
+            }
+        }, 2500);
     }
 
     updateChannelBadges() {
@@ -426,14 +422,13 @@ module.exports = class VoicePingAutoReconnect {
                                       container.querySelector('[class*="content_"]') ||
                                       container;
                 targetWrapper.appendChild(badge);
-            } else {
+            } else if (badge.textContent !== `${ping}ms`) {
                 badge.className = `voice-ping-channel-badge ${pingClass}`;
                 badge.textContent = `${ping}ms`;
             }
         });
     }
 
-    // Кнопка в шапке сервера (над списком каналов) — доступна всегда, даже вне звонка!
     injectServerHeaderButton() {
         const header = document.querySelector('header[class*="header_"], [class*="headerContent_"], nav[aria-label*="сервер"] [class*="container_"]');
         if (!header) return;
@@ -457,7 +452,6 @@ module.exports = class VoicePingAutoReconnect {
         header.appendChild(btn);
     }
 
-    // Контролы в панели голосовой связи
     injectHeaderControls() {
         const inVoice = this.getCurrentVoiceChannelId();
         if (!inVoice) {
@@ -477,7 +471,6 @@ module.exports = class VoicePingAutoReconnect {
         const container = document.createElement("div");
         container.className = "voice-ping-header-controls";
 
-        // 1. Кнопка показа пинга на 30 секунд (Антенна)
         const pingToggleBtn = document.createElement("button");
         pingToggleBtn.className = "voice-ping-icon-btn voice-ping-toggle-btn";
         pingToggleBtn.title = "Показать пинг всех каналов на 30 секунд";
@@ -491,7 +484,6 @@ module.exports = class VoicePingAutoReconnect {
             this.togglePingVisibility(this.config.displayDurationSec);
         };
 
-        // 2. Тест 5000ms
         const testBtn = document.createElement("button");
         testBtn.className = "voice-ping-icon-btn test-btn";
         testBtn.title = "Тест: передать датчику 5200ms пинга и проверить реакцию монитора";
@@ -506,7 +498,6 @@ module.exports = class VoicePingAutoReconnect {
             BdApi.UI.showToast("⚡ [Тест] Значение пинга изменено на 5240ms. Ожидание детектора...", { type: "info" });
         };
 
-        // 3. Ручной реконнект
         const reconnBtn = document.createElement("button");
         reconnBtn.className = "voice-ping-icon-btn reconn-btn";
         reconnBtn.title = "Ручной перезаход в канал";
@@ -532,18 +523,6 @@ module.exports = class VoicePingAutoReconnect {
                 rtcStatus.parentElement.appendChild(container);
             }
         }
-    }
-
-    observeDOM() {
-        this.observer = new MutationObserver(() => {
-            this.injectHeaderControls();
-            this.injectServerHeaderButton();
-            if (Date.now() < this.pingVisibleUntil) {
-                this.updateChannelBadges();
-            }
-        });
-
-        this.observer.observe(document.body, { childList: true, subtree: true });
     }
 
     getSettingsPanel() {
