@@ -1,8 +1,8 @@
 /**
  * @name VoicePingAutoReconnect
  * @author etfte
- * @version 1.9.0
- * @description Отображает РЕАЛЬНЫЙ сетевой пинг каналов по кнопке на 30 секунд и перезаходит при обрыве сессии (5000ms).
+ * @version 2.0.0
+ * @description Отображает реальный пинг каналов по нативной иконке в верхнем тулбаре на 30 секунд и перезаходит при обрывах (5000ms).
  */
 
 module.exports = class VoicePingAutoReconnect {
@@ -31,9 +31,9 @@ module.exports = class VoicePingAutoReconnect {
         this.patchChannelItem();
         this.startMonitor();
         this.startPeriodicUpdates();
-        this.measureRealNetworkPing(); // Первичный реальный замер сети
-        console.log("[VoicePing] v1.9.0: Реальный расчет пинга включен.");
-        BdApi.UI.showToast("[VoicePing] v1.9.0 активен (реальный пинг)!", { type: "success" });
+        this.measureRealNetworkPing();
+        console.log("[VoicePing] v2.0.0: Кнопка перенесена в нативный тулбар.");
+        BdApi.UI.showToast("[VoicePing] v2.0.0 активен (нативный тулбар)!", { type: "success" });
     }
 
     stop() {
@@ -47,14 +47,14 @@ module.exports = class VoicePingAutoReconnect {
     }
 
     onSwitch() {
+        this.injectToolbarButton();
         this.injectHeaderControls();
-        this.injectServerHeaderButton();
         this.updateChannelBadges();
     }
 
     cleanOldElements() {
         document.querySelectorAll(
-            ".voice-ping-channel-badge, .voice-ping-controls-container, .voice-ping-header-controls, .voice-ping-server-btn"
+            ".voice-ping-channel-badge, .voice-ping-controls-container, .voice-ping-header-controls, .voice-ping-server-btn, .voice-ping-toolbar-btn"
         ).forEach(el => el.remove());
         document.body.classList.remove("voice-ping-active");
     }
@@ -74,41 +74,50 @@ module.exports = class VoicePingAutoReconnect {
 
     injectStyles() {
         BdApi.DOM.addStyle("voice-ping-autoreconnect-style", `
-            .voice-ping-server-btn {
+            /* Нативная иконка в правом верхнем тулбаре Discord */
+            .voice-ping-toolbar-btn {
+                width: 24px;
                 height: 24px;
-                padding: 0 8px;
-                font-size: 11px;
-                font-weight: 600;
-                font-family: var(--font-primary, "gg sans", sans-serif);
-                border-radius: 4px;
-                border: 1px solid var(--background-modifier-accent, rgba(255, 255, 255, 0.1));
+                margin: 0 4px;
                 cursor: pointer;
-                background-color: var(--background-secondary-alt, #2b2d31);
-                color: var(--interactive-normal, #b5bac1);
-                display: inline-flex;
+                display: flex;
                 align-items: center;
-                gap: 5px;
-                margin-left: auto;
-                margin-right: 8px;
-                transition: background-color 0.15s ease, color 0.15s ease;
+                justify-content: center;
+                color: var(--interactive-normal, #b5bac1);
+                transition: color 0.15s ease, transform 0.1s ease;
+                position: relative;
                 outline: none;
                 user-select: none;
             }
-            .voice-ping-server-btn:hover {
-                background-color: var(--background-modifier-hover, #35373c);
+            .voice-ping-toolbar-btn:hover {
                 color: var(--interactive-hover, #ffffff);
             }
-            .voice-ping-server-btn.active {
-                background-color: rgba(35, 165, 89, 0.25) !important;
-                border-color: rgba(35, 165, 89, 0.6) !important;
+            .voice-ping-toolbar-btn:active {
+                transform: scale(0.9);
+            }
+            .voice-ping-toolbar-btn.active {
                 color: #23a559 !important;
             }
-            .voice-ping-server-btn svg {
-                width: 14px;
-                height: 14px;
+            .voice-ping-toolbar-btn svg {
+                width: 20px;
+                height: 20px;
                 fill: currentColor;
             }
+            .voice-ping-toolbar-counter {
+                position: absolute;
+                bottom: -3px;
+                right: -4px;
+                background: #23a559;
+                color: #ffffff;
+                font-size: 8px;
+                font-weight: 800;
+                padding: 0 3px;
+                border-radius: 4px;
+                line-height: 11px;
+                pointer-events: none;
+            }
 
+            /* Панель внизу у звонка */
             .voice-ping-header-controls {
                 display: inline-flex;
                 align-items: center;
@@ -154,6 +163,7 @@ module.exports = class VoicePingAutoReconnect {
                 flex-shrink: 0;
             }
 
+            /* Бейджи пинга у каналов */
             .voice-ping-channel-badge {
                 display: none !important;
                 align-items: center;
@@ -192,7 +202,6 @@ module.exports = class VoicePingAutoReconnect {
         `);
     }
 
-    // Реальный замер RTT до Discord через шлюз API
     async measureRealNetworkPing() {
         if (this.isMeasuring) return this.lastMeasuredRealPing;
         this.isMeasuring = true;
@@ -206,17 +215,15 @@ module.exports = class VoicePingAutoReconnect {
             const rtt = Math.round(performance.now() - start);
             if (rtt > 0) {
                 this.lastMeasuredRealPing = rtt;
-                console.log(`[VoicePing] Реальный замер сети: ${rtt}ms`);
+                console.log(`[VoicePing] Реальный сетевой пинг: ${rtt}ms`);
             }
         } catch (e) {
-            console.log("[VoicePing] Ошибка замера gateway, используется последнее значение:", this.lastMeasuredRealPing);
         } finally {
             this.isMeasuring = false;
         }
         return this.lastMeasuredRealPing;
     }
 
-    // Получение РЕАЛЬНОГО пинга активного голосового соединения (WebRTC)
     getRealActiveVoicePing() {
         try {
             if (this.RTCConnectionStore) {
@@ -272,12 +279,11 @@ module.exports = class VoicePingAutoReconnect {
         this.pingVisibleUntil = now + (seconds * 1000);
         document.body.classList.add("voice-ping-active");
 
-        // Сразу делаем свежий замер реального пинга
         this.measureRealNetworkPing().then(() => {
             this.updateChannelBadges();
         });
 
-        BdApi.UI.showToast(`📶 [VoicePing] Пинг показан на ${seconds} сек.`, { type: "success" });
+        BdApi.UI.showToast(`📶 [VoicePing] Пинг каналов включён на ${seconds} сек.`, { type: "success" });
 
         if (this.countdownInterval) clearInterval(this.countdownInterval);
         this.countdownInterval = setInterval(() => {
@@ -296,20 +302,35 @@ module.exports = class VoicePingAutoReconnect {
 
     updateButtonLabels(remainingSeconds) {
         const isNowActive = remainingSeconds > 0;
-        const newText = isNowActive ? `Пинг (${remainingSeconds}с)` : "Пинг";
 
-        document.querySelectorAll(".voice-ping-server-btn").forEach(btn => {
-            const label = btn.querySelector(".voice-ping-btn-text");
-            if (label && label.textContent !== newText) {
-                label.textContent = newText;
+        // Обновление иконки в верхнем тулбаре
+        document.querySelectorAll(".voice-ping-toolbar-btn").forEach(btn => {
+            let counter = btn.querySelector(".voice-ping-toolbar-counter");
+            if (isNowActive) {
+                btn.classList.add("active");
+                btn.title = `Скрыть пинг (осталось ${remainingSeconds}с)`;
+                if (!counter) {
+                    counter = document.createElement("span");
+                    counter.className = "voice-ping-toolbar-counter";
+                    btn.appendChild(counter);
+                }
+                counter.textContent = `${remainingSeconds}`;
+            } else {
+                btn.classList.remove("active");
+                btn.title = "Показать пинг каналов на 30 секунд";
+                if (counter) counter.remove();
             }
-            if (isNowActive && !btn.classList.contains("active")) btn.classList.add("active");
-            else if (!isNowActive && btn.classList.contains("active")) btn.classList.remove("active");
         });
 
+        // Обновление иконки в панели голосовой связи
         document.querySelectorAll(".voice-ping-toggle-btn").forEach(btn => {
-            if (isNowActive && !btn.classList.contains("active")) btn.classList.add("active");
-            else if (!isNowActive && btn.classList.contains("active")) btn.classList.remove("active");
+            if (isNowActive) {
+                btn.classList.add("active");
+                btn.title = `Скрыть пинг (осталось ${remainingSeconds}с)`;
+            } else {
+                btn.classList.remove("active");
+                btn.title = "Показать пинг каналов на 30 секунд";
+            }
         });
     }
 
@@ -365,7 +386,6 @@ module.exports = class VoicePingAutoReconnect {
                 const channelId = channel.id;
                 const currentVoiceId = this.getCurrentVoiceChannelId();
                 
-                // РЕАЛЬНЫЙ ПИНГ: если мы в этом канале — берем реальный WebRTC пинг
                 let ping = 0;
                 if (channelId === currentVoiceId) {
                     ping = this.getCurrentPing();
@@ -396,20 +416,19 @@ module.exports = class VoicePingAutoReconnect {
     }
 
     startPeriodicUpdates() {
+        this.injectToolbarButton();
         this.injectHeaderControls();
-        this.injectServerHeaderButton();
         this.updateChannelBadges();
 
         this.badgeInterval = setInterval(() => {
+            this.injectToolbarButton();
             this.injectHeaderControls();
-            this.injectServerHeaderButton();
             if (Date.now() < this.pingVisibleUntil) {
                 this.updateChannelBadges();
             }
         }, 2000);
     }
 
-    // Обновление бейджей с честным реальным пингом
     updateChannelBadges() {
         const channelContainers = document.querySelectorAll(
             '[data-list-item-id^="channels___"], li[class*="containerDefault_"], div[class*="channel_"]'
@@ -454,9 +473,6 @@ module.exports = class VoicePingAutoReconnect {
 
             if (!isVoice) return;
 
-            // РАСЧЕТ РЕАЛЬНОГО ПИНГА:
-            // 1) Если мы в этом канале — берем реальный пинг из WebRTC Discord!
-            // 2) Если в другом — берем замеренный RTT шлюза
             let ping = 0;
             if (channelId === currentVoiceId && activeRealVoicePing) {
                 ping = activeRealVoicePing;
@@ -490,27 +506,30 @@ module.exports = class VoicePingAutoReconnect {
         });
     }
 
-    injectServerHeaderButton() {
-        const header = document.querySelector('header[class*="header_"], [class*="headerContent_"], nav[aria-label*="сервер"] [class*="container_"]');
-        if (!header) return;
+    // Встраивание кнопки в верхний правый тулбар Discord (где закрепы, колокольчик, поиск)
+    injectToolbarButton() {
+        const toolbar = document.querySelector('section[class*="title_"] [class*="toolbar_"], [class*="toolbar_"]');
+        if (!toolbar) return;
 
-        if (header.querySelector(".voice-ping-server-btn")) return;
+        if (toolbar.querySelector(".voice-ping-toolbar-btn")) return;
 
-        const btn = document.createElement("button");
-        btn.className = "voice-ping-server-btn";
-        btn.title = "Показать реальный пинг голосовых каналов на 30 секунд";
+        const btn = document.createElement("div");
+        btn.className = "voice-ping-toolbar-btn";
+        btn.setAttribute("role", "button");
+        btn.setAttribute("tabindex", "0");
+        btn.title = "Показать пинг каналов на 30 секунд";
         btn.innerHTML = `
             <svg viewBox="0 0 24 24">
                 <path d="M12 3c-4.97 0-9 4.03-9 9 0 2.12.74 4.07 1.97 5.61L4.35 19.4c-1.47-1.84-2.35-4.17-2.35-6.7 0-5.85 4.75-10.6 10.6-10.6 5.85 0 10.6 4.75 10.6 10.6 0 2.53-.88 4.86-2.35 6.7l-.62-1.79C21.26 16.07 22 14.12 22 12c0-4.97-4.03-9-9-9zm0 4c-2.76 0-5 2.24-5 5 0 1.25.46 2.39 1.22 3.28l-.72 2.07C6.44 16.14 6 14.62 6 12c0-3.31 2.69-6 6-6 3.31 0 6 2.69 6 6 0 2.62-.44 4.14-1.5 5.35l-.72-2.07C16.54 14.39 17 13.25 17 12c0-2.76-2.24-5-5-5zm0 4c-1.1 0-2 .9-2 2 0 .55.22 1.05.59 1.41l-.59 1.71C9.39 15.65 9 14.88 9 14c0-1.66 1.34-3 3-3s3 1.34 3 3c0 .88-.39 1.65-1 2.12l-.59-1.71c.37-.36.59-.86.59-1.41 0-1.1-.9-2-2-2z"/>
             </svg>
-            <span class="voice-ping-btn-text">Пинг</span>
         `;
         btn.onclick = (e) => {
             e.stopPropagation();
             this.togglePingVisibility(this.config.displayDurationSec);
         };
 
-        header.appendChild(btn);
+        // Вставляем первой иконкой в тулбаре
+        toolbar.insertBefore(btn, toolbar.firstChild);
     }
 
     injectHeaderControls() {
