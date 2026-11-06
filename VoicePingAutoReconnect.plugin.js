@@ -1,8 +1,8 @@
 /**
  * @name VoicePingAutoReconnect
  * @author etfte
- * @version 1.4.0
- * @description Отображает пинг голосовых каналов, автоматически перезаходит при пинге 5000ms и элегантно встраивает микро-иконки в панель соединения рядом с кнопкой отключения.
+ * @version 1.5.0
+ * @description Отображает пинг голосовых каналов, отслеживает зависания WebRTC (5000ms) сторожевым таймером и производит честную проверку условий порога.
  */
 
 module.exports = class VoicePingAutoReconnect {
@@ -17,6 +17,7 @@ module.exports = class VoicePingAutoReconnect {
         this.isReconnecting = false;
         this.observer = null;
         this.cachedPings = {};
+        this.simulatedPing = null; // Флаг симуляции для честной проверки мониторинга
     }
 
     start() {
@@ -27,7 +28,8 @@ module.exports = class VoicePingAutoReconnect {
         this.startMonitor();
         this.startBadgeUpdater();
         this.observeDOM();
-        BdApi.UI.showToast("[VoicePing] v1.4.0: Новый компактный дизайн активен!", { type: "success" });
+        console.log("[VoicePing] Плагин v1.5.0 запущен. Сторожевой таймер (Watchdog) активен.");
+        BdApi.UI.showToast("[VoicePing] Мониторинг запущен (порог: " + this.config.pingThreshold + "ms)", { type: "info" });
     }
 
     stop() {
@@ -60,7 +62,6 @@ module.exports = class VoicePingAutoReconnect {
 
     injectStyles() {
         BdApi.DOM.addStyle("voice-ping-autoreconnect-style", `
-            /* Контейнер микро-иконок рядом с кнопкой отключения */
             .voice-ping-header-controls {
                 display: inline-flex;
                 align-items: center;
@@ -105,8 +106,6 @@ module.exports = class VoicePingAutoReconnect {
                 fill: currentColor;
                 flex-shrink: 0;
             }
-
-            /* Индикатор пинга в каналах */
             .voice-ping-channel-badge {
                 font-size: 9px;
                 font-weight: 700;
@@ -145,6 +144,11 @@ module.exports = class VoicePingAutoReconnect {
     }
 
     getCurrentPing() {
+        // Если запущена симуляция — отдаем тестовое значение для проверки алгоритма
+        if (this.simulatedPing !== null) {
+            return this.simulatedPing;
+        }
+
         try {
             if (this.RTCConnectionStore?.getAveragePing) {
                 return this.RTCConnectionStore.getAveragePing();
@@ -156,14 +160,27 @@ module.exports = class VoicePingAutoReconnect {
         return 0;
     }
 
+    // Сторожевой цикл мониторинга
     startMonitor() {
         this.interval = setInterval(() => {
             const channelId = this.getCurrentVoiceChannelId();
             if (!channelId || this.isReconnecting) return;
 
             const ping = this.getCurrentPing();
+            
+            // Если пинг превышает порог
             if (ping >= this.config.pingThreshold) {
-                this.triggerReconnect(`Обнаружен пинг ${ping}ms`);
+                const wasSimulated = this.simulatedPing !== null;
+                this.simulatedPing = null; // Сбрасываем симуляцию
+
+                console.warn(`[VoicePing Watchdog] ⚠️ Зафиксирован пинг: ${ping}ms >= ${this.config.pingThreshold}ms! Запуск автопереподключения...`);
+                
+                BdApi.UI.showToast(
+                    `[VoicePing Watchdog] ⚠️ Пинг ${ping}ms превысил лимит (${this.config.pingThreshold}ms)! Сработал авто-реконнект.`,
+                    { type: wasSimulated ? "error" : "warning", timeout: 4000 }
+                );
+
+                this.triggerReconnect(`Сторожевой таймер зафиксировал пинг ${ping}ms`);
             }
         }, this.config.checkIntervalMs);
     }
@@ -177,13 +194,13 @@ module.exports = class VoicePingAutoReconnect {
         if (this.isReconnecting) return;
 
         this.isReconnecting = true;
-        BdApi.UI.showToast(`[VoicePing] ⚠️ ${reason}. Переподключение...`, { type: "warning" });
+        console.log(`[VoicePing] Переподключение к каналу ${channelId}. Причина: ${reason}`);
 
         this.ChannelActions?.selectVoiceChannel(null);
 
         setTimeout(() => {
             this.ChannelActions?.selectVoiceChannel(channelId);
-            BdApi.UI.showToast("[VoicePing] ✅ Переподключено к каналу!", { type: "success" });
+            BdApi.UI.showToast("[VoicePing] ✅ Канал перезапущен, сессия восстановлена!", { type: "success" });
             this.isReconnecting = false;
         }, this.config.reconnectDelay);
     }
@@ -232,7 +249,6 @@ module.exports = class VoicePingAutoReconnect {
         });
     }
 
-    // Встраивание аккуратных микро-иконок прямо в панель соединения (рядом с кнопкой Disconnect / Hang Up)
     injectHeaderControls() {
         const inVoice = this.getCurrentVoiceChannelId();
         if (!inVoice) {
@@ -243,10 +259,8 @@ module.exports = class VoicePingAutoReconnect {
         const panels = document.querySelector('section[class*="panels_"]');
         if (!panels) return;
 
-        // Если контролы уже есть на месте — ничего не делаем
         if (panels.querySelector(".voice-ping-header-controls")) return;
 
-        // Ищем нативную кнопку отключения от звонка (красная/серая телефонная трубка с крестиком)
         const disconnectBtn = panels.querySelector(
             'button[aria-label*="Отключ"], button[aria-label*="Disconnect"], button[aria-label*="End call"], [class*="disconnectButton_"]'
         );
@@ -254,10 +268,11 @@ module.exports = class VoicePingAutoReconnect {
         const container = document.createElement("div");
         container.className = "voice-ping-header-controls";
 
-        // 1. Микро-кнопка Тест 5000ms (Молния)
+        // Кнопка ТЕСТА: теперь она НЕ вызывает reconnect напрямую!
+        // Она эмулирует высокий пинг в потоке данных, и мы ждем, пока фоновый монитор сам его обнаружит.
         const testBtn = document.createElement("button");
         testBtn.className = "voice-ping-icon-btn test-btn";
-        testBtn.title = "Тест 5000ms (проверка авто-реконнекта)";
+        testBtn.title = "Тест: передать датчику 5200ms пинга и проверить реакцию монитора";
         testBtn.innerHTML = `
             <svg viewBox="0 0 24 24">
                 <path d="M13 2L4 13.5h6V22l9-11.5h-6L13 2z"/>
@@ -265,14 +280,15 @@ module.exports = class VoicePingAutoReconnect {
         `;
         testBtn.onclick = (e) => {
             e.stopPropagation();
-            BdApi.UI.showToast("[VoicePing] Симуляция пинга 5000ms!", { type: "error" });
-            this.triggerReconnect("Тестовый скачок 5000ms");
+            this.simulatedPing = 5240;
+            BdApi.UI.showToast("⚡ [Тест] Значение пинга изменено на 5240ms. Ожидание детектора...", { type: "info" });
+            console.log("[VoicePing] Тестовый спайк: simulatedPing установлен в 5240ms. Следующий тик таймера выполнит проверку (ping >= threshold).");
         };
 
-        // 2. Микро-кнопка Реконнект (Стрелки по кругу)
+        // Кнопка прямого ручного перезахода
         const reconnBtn = document.createElement("button");
         reconnBtn.className = "voice-ping-icon-btn reconn-btn";
-        reconnBtn.title = "Принудительно перезайти в голосовой канал";
+        reconnBtn.title = "Ручной перезаход в канал";
         reconnBtn.innerHTML = `
             <svg viewBox="0 0 24 24">
                 <path d="M17.65 6.35C16.2 4.9 14.21 4 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08c-.82 2.33-3.04 4-5.65 4-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/>
@@ -280,17 +296,15 @@ module.exports = class VoicePingAutoReconnect {
         `;
         reconnBtn.onclick = (e) => {
             e.stopPropagation();
-            this.triggerReconnect("Ручной реконнект");
+            this.triggerReconnect("Ручной клик пользователя");
         };
 
         container.appendChild(testBtn);
         container.appendChild(reconnBtn);
 
         if (disconnectBtn && disconnectBtn.parentElement) {
-            // Вставляем прямо перед кнопкой отключения — в один ряд
             disconnectBtn.parentElement.insertBefore(container, disconnectBtn);
         } else {
-            // Фолбэк: вставляем в блок статуса соединения
             const rtcStatus = panels.querySelector('[class*="rtcConnectionStatus_"], [class*="statusWithPopout_"]');
             if (rtcStatus && rtcStatus.parentElement) {
                 rtcStatus.parentElement.appendChild(container);
