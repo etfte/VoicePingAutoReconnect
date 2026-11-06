@@ -1,8 +1,8 @@
 /**
  * @name VoicePingAutoReconnect
  * @author etfte
- * @version 1.3.0
- * @description Отображает пинг голосовых каналов, автоматически перезаходит при пинге 5000ms и нативно встраивает кнопки управления в дизайн Discord.
+ * @version 1.4.0
+ * @description Отображает пинг голосовых каналов, автоматически перезаходит при пинге 5000ms и элегантно встраивает микро-иконки в панель соединения рядом с кнопкой отключения.
  */
 
 module.exports = class VoicePingAutoReconnect {
@@ -27,7 +27,7 @@ module.exports = class VoicePingAutoReconnect {
         this.startMonitor();
         this.startBadgeUpdater();
         this.observeDOM();
-        BdApi.UI.showToast("[VoicePing] v1.3.0 запущен!", { type: "success" });
+        BdApi.UI.showToast("[VoicePing] v1.4.0: Новый компактный дизайн активен!", { type: "success" });
     }
 
     stop() {
@@ -40,7 +40,9 @@ module.exports = class VoicePingAutoReconnect {
     }
 
     cleanOldElements() {
-        document.querySelectorAll(".voice-ping-channel-badge, .voice-ping-controls-container, .voice-ping-popout-test-btn").forEach(el => el.remove());
+        document.querySelectorAll(
+            ".voice-ping-channel-badge, .voice-ping-controls-container, .voice-ping-header-controls, .voice-ping-popout-test-btn"
+        ).forEach(el => el.remove());
     }
 
     loadSettings() {
@@ -58,47 +60,53 @@ module.exports = class VoicePingAutoReconnect {
 
     injectStyles() {
         BdApi.DOM.addStyle("voice-ping-autoreconnect-style", `
-            .voice-ping-controls-container {
-                display: flex;
-                gap: 8px;
-                margin-top: 8px;
-                width: 100%;
-                box-sizing: border-box;
+            /* Контейнер микро-иконок рядом с кнопкой отключения */
+            .voice-ping-header-controls {
+                display: inline-flex;
+                align-items: center;
+                gap: 4px;
+                margin-right: 4px;
+                vertical-align: middle;
             }
-            .voice-ping-btn {
-                flex: 1;
-                height: 32px;
-                padding: 0 10px;
-                font-size: 12px;
-                font-weight: 500;
-                font-family: var(--font-primary, "gg sans", "Noto Sans", "Helvetica Neue", Helvetica, Arial, sans-serif);
-                border-radius: 8px;
+            .voice-ping-icon-btn {
+                width: 28px;
+                height: 28px;
+                padding: 0;
+                border-radius: 4px;
                 border: none;
                 cursor: pointer;
-                background-color: var(--background-secondary-alt, #2b2d31);
-                color: var(--interactive-normal, #b5bac1);
-                transition: background-color 0.15s ease, color 0.15s ease, transform 0.1s ease;
-                display: flex;
+                background: transparent;
+                color: var(--interactive-normal, #949ba4);
+                display: inline-flex;
                 align-items: center;
                 justify-content: center;
-                gap: 6px;
+                transition: background-color 0.15s ease, color 0.15s ease, transform 0.1s ease;
                 outline: none;
-                user-select: none;
+                position: relative;
             }
-            .voice-ping-btn svg {
-                width: 15px;
-                height: 15px;
+            .voice-ping-icon-btn:hover {
+                background-color: var(--background-modifier-hover, rgba(255, 255, 255, 0.08));
+                color: var(--interactive-hover, #ffffff);
+            }
+            .voice-ping-icon-btn:active {
+                transform: scale(0.92);
+            }
+            .voice-ping-icon-btn.test-btn:hover {
+                color: #f23f43;
+                background-color: rgba(242, 63, 67, 0.15);
+            }
+            .voice-ping-icon-btn.reconn-btn:hover {
+                color: #5865f2;
+                background-color: rgba(88, 101, 242, 0.15);
+            }
+            .voice-ping-icon-btn svg {
+                width: 17px;
+                height: 17px;
                 fill: currentColor;
                 flex-shrink: 0;
             }
-            .voice-ping-btn:hover {
-                background-color: var(--background-modifier-hover, #35373c);
-                color: var(--interactive-hover, #ffffff);
-            }
-            .voice-ping-btn:active {
-                background-color: var(--background-modifier-active, #3c3f45);
-                transform: scale(0.98);
-            }
+
+            /* Индикатор пинга в каналах */
             .voice-ping-channel-badge {
                 font-size: 9px;
                 font-weight: 700;
@@ -184,7 +192,7 @@ module.exports = class VoicePingAutoReconnect {
         this.updateChannelBadges();
         this.badgeInterval = setInterval(() => {
             this.updateChannelBadges();
-            this.injectConnectionControls();
+            this.injectHeaderControls();
         }, 2000);
     }
 
@@ -224,71 +232,75 @@ module.exports = class VoicePingAutoReconnect {
         });
     }
 
-    injectConnectionControls() {
+    // Встраивание аккуратных микро-иконок прямо в панель соединения (рядом с кнопкой Disconnect / Hang Up)
+    injectHeaderControls() {
         const inVoice = this.getCurrentVoiceChannelId();
         if (!inVoice) {
-            document.querySelectorAll(".voice-ping-controls-container").forEach(el => el.remove());
+            document.querySelectorAll(".voice-ping-header-controls").forEach(el => el.remove());
             return;
         }
 
         const panels = document.querySelector('section[class*="panels_"]');
         if (!panels) return;
 
-        const actionButtons = panels.querySelector('[class*="actionButtons_"]');
-        const rtcStatus = panels.querySelector('[class*="rtcConnectionStatus_"], [class*="statusWithPopout_"], [class*="connection_"], [class*="subtext_"]');
+        // Если контролы уже есть на месте — ничего не делаем
+        if (panels.querySelector(".voice-ping-header-controls")) return;
 
-        if (!actionButtons && !rtcStatus) return;
+        // Ищем нативную кнопку отключения от звонка (красная/серая телефонная трубка с крестиком)
+        const disconnectBtn = panels.querySelector(
+            'button[aria-label*="Отключ"], button[aria-label*="Disconnect"], button[aria-label*="End call"], [class*="disconnectButton_"]'
+        );
 
-        if (!panels.querySelector(".voice-ping-controls-container")) {
-            const container = document.createElement("div");
-            container.className = "voice-ping-controls-container";
+        const container = document.createElement("div");
+        container.className = "voice-ping-header-controls";
 
-            // Кнопка Тест 5000ms с векторной иконкой молнии Discord
-            const testBtn = document.createElement("button");
-            testBtn.className = "voice-ping-btn";
-            testBtn.innerHTML = `
-                <svg viewBox="0 0 24 24">
-                    <path d="M13 2L4 13.5h6V22l9-11.5h-6L13 2z"/>
-                </svg>
-                <span>Тест 5000ms</span>
-            `;
-            testBtn.title = "Вызвать тестовый пинг 5000ms и проверить автопереподключение";
-            testBtn.onclick = (e) => {
-                e.stopPropagation();
-                BdApi.UI.showToast("[VoicePing] Симуляция пинга 5000ms!", { type: "error" });
-                this.triggerReconnect("Тестовый скачок 5000ms");
-            };
+        // 1. Микро-кнопка Тест 5000ms (Молния)
+        const testBtn = document.createElement("button");
+        testBtn.className = "voice-ping-icon-btn test-btn";
+        testBtn.title = "Тест 5000ms (проверка авто-реконнекта)";
+        testBtn.innerHTML = `
+            <svg viewBox="0 0 24 24">
+                <path d="M13 2L4 13.5h6V22l9-11.5h-6L13 2z"/>
+            </svg>
+        `;
+        testBtn.onclick = (e) => {
+            e.stopPropagation();
+            BdApi.UI.showToast("[VoicePing] Симуляция пинга 5000ms!", { type: "error" });
+            this.triggerReconnect("Тестовый скачок 5000ms");
+        };
 
-            // Кнопка Реконнект с векторной иконкой синхронизации/повтора
-            const reconnBtn = document.createElement("button");
-            reconnBtn.className = "voice-ping-btn";
-            reconnBtn.innerHTML = `
-                <svg viewBox="0 0 24 24">
-                    <path d="M17.65 6.35C16.2 4.9 14.21 4 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08c-.82 2.33-3.04 4-5.65 4-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/>
-                </svg>
-                <span>Реконнект</span>
-            `;
-            reconnBtn.title = "Принудительно перезайти в канал";
-            reconnBtn.onclick = (e) => {
-                e.stopPropagation();
-                this.triggerReconnect("Ручной реконнект");
-            };
+        // 2. Микро-кнопка Реконнект (Стрелки по кругу)
+        const reconnBtn = document.createElement("button");
+        reconnBtn.className = "voice-ping-icon-btn reconn-btn";
+        reconnBtn.title = "Принудительно перезайти в голосовой канал";
+        reconnBtn.innerHTML = `
+            <svg viewBox="0 0 24 24">
+                <path d="M17.65 6.35C16.2 4.9 14.21 4 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08c-.82 2.33-3.04 4-5.65 4-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/>
+            </svg>
+        `;
+        reconnBtn.onclick = (e) => {
+            e.stopPropagation();
+            this.triggerReconnect("Ручной реконнект");
+        };
 
-            container.appendChild(testBtn);
-            container.appendChild(reconnBtn);
+        container.appendChild(testBtn);
+        container.appendChild(reconnBtn);
 
-            if (actionButtons) {
-                actionButtons.parentElement.insertBefore(container, actionButtons.nextSibling);
-            } else {
-                const anchor = rtcStatus.closest('[class*="container_"]') || rtcStatus.parentElement;
-                anchor.appendChild(container);
+        if (disconnectBtn && disconnectBtn.parentElement) {
+            // Вставляем прямо перед кнопкой отключения — в один ряд
+            disconnectBtn.parentElement.insertBefore(container, disconnectBtn);
+        } else {
+            // Фолбэк: вставляем в блок статуса соединения
+            const rtcStatus = panels.querySelector('[class*="rtcConnectionStatus_"], [class*="statusWithPopout_"]');
+            if (rtcStatus && rtcStatus.parentElement) {
+                rtcStatus.parentElement.appendChild(container);
             }
         }
     }
 
     observeDOM() {
         this.observer = new MutationObserver(() => {
-            this.injectConnectionControls();
+            this.injectHeaderControls();
         });
 
         this.observer.observe(document.body, { childList: true, subtree: true });
