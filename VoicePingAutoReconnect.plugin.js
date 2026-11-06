@@ -1,8 +1,8 @@
 /**
  * @name VoicePingAutoReconnect
  * @author etfte
- * @version 1.2.0
- * @description Отображает пинг голосовых каналов, автоматически перезаходит при пинге 5000ms и добавляет компактные кнопки управления в голосовую панель.
+ * @version 1.3.0
+ * @description Отображает пинг голосовых каналов, автоматически перезаходит при пинге 5000ms и нативно встраивает кнопки управления в дизайн Discord.
  */
 
 module.exports = class VoicePingAutoReconnect {
@@ -27,7 +27,7 @@ module.exports = class VoicePingAutoReconnect {
         this.startMonitor();
         this.startBadgeUpdater();
         this.observeDOM();
-        BdApi.UI.showToast("[VoicePing] Плагин v1.2.0 запущен!", { type: "success" });
+        BdApi.UI.showToast("[VoicePing] v1.3.0 запущен!", { type: "success" });
     }
 
     stop() {
@@ -60,60 +60,54 @@ module.exports = class VoicePingAutoReconnect {
         BdApi.DOM.addStyle("voice-ping-autoreconnect-style", `
             .voice-ping-controls-container {
                 display: flex;
-                gap: 5px;
-                margin: 4px 0 2px 0;
-                padding: 0 2px;
+                gap: 8px;
+                margin-top: 8px;
                 width: 100%;
                 box-sizing: border-box;
             }
             .voice-ping-btn {
                 flex: 1;
-                height: 20px;
-                padding: 0 6px;
-                font-size: 10px;
-                font-weight: 600;
-                border-radius: 3px;
+                height: 32px;
+                padding: 0 10px;
+                font-size: 12px;
+                font-weight: 500;
+                font-family: var(--font-primary, "gg sans", "Noto Sans", "Helvetica Neue", Helvetica, Arial, sans-serif);
+                border-radius: 8px;
+                border: none;
                 cursor: pointer;
-                transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+                background-color: var(--background-secondary-alt, #2b2d31);
+                color: var(--interactive-normal, #b5bac1);
+                transition: background-color 0.15s ease, color 0.15s ease, transform 0.1s ease;
                 display: flex;
                 align-items: center;
                 justify-content: center;
-                gap: 3px;
-                line-height: 1;
-                white-space: nowrap;
+                gap: 6px;
+                outline: none;
+                user-select: none;
+            }
+            .voice-ping-btn svg {
+                width: 15px;
+                height: 15px;
+                fill: currentColor;
+                flex-shrink: 0;
+            }
+            .voice-ping-btn:hover {
+                background-color: var(--background-modifier-hover, #35373c);
+                color: var(--interactive-hover, #ffffff);
             }
             .voice-ping-btn:active {
-                transform: scale(0.97);
-            }
-            .voice-ping-test {
-                background: rgba(242, 63, 67, 0.15);
-                color: #f23f43;
-                border: 1px solid rgba(242, 63, 67, 0.35);
-            }
-            .voice-ping-test:hover {
-                background: rgba(242, 63, 67, 0.3);
-                border-color: rgba(242, 63, 67, 0.6);
-                color: #ffffff;
-            }
-            .voice-ping-reconn {
-                background: rgba(78, 80, 88, 0.25);
-                color: #dbdee1;
-                border: 1px solid rgba(78, 80, 88, 0.4);
-            }
-            .voice-ping-reconn:hover {
-                background: rgba(78, 80, 88, 0.45);
-                border-color: rgba(78, 80, 88, 0.7);
-                color: #ffffff;
+                background-color: var(--background-modifier-active, #3c3f45);
+                transform: scale(0.98);
             }
             .voice-ping-channel-badge {
                 font-size: 9px;
                 font-weight: 700;
-                padding: 1px 4px;
+                padding: 1px 5px;
                 border-radius: 4px;
                 margin-left: 6px;
                 vertical-align: middle;
                 display: inline-block;
-                line-height: 12px;
+                line-height: 13px;
                 letter-spacing: 0.2px;
             }
             .voice-ping-good {
@@ -240,16 +234,24 @@ module.exports = class VoicePingAutoReconnect {
         const panels = document.querySelector('section[class*="panels_"]');
         if (!panels) return;
 
+        const actionButtons = panels.querySelector('[class*="actionButtons_"]');
         const rtcStatus = panels.querySelector('[class*="rtcConnectionStatus_"], [class*="statusWithPopout_"], [class*="connection_"], [class*="subtext_"]');
-        if (!rtcStatus) return;
+
+        if (!actionButtons && !rtcStatus) return;
 
         if (!panels.querySelector(".voice-ping-controls-container")) {
             const container = document.createElement("div");
             container.className = "voice-ping-controls-container";
 
+            // Кнопка Тест 5000ms с векторной иконкой молнии Discord
             const testBtn = document.createElement("button");
-            testBtn.className = "voice-ping-btn voice-ping-test";
-            testBtn.innerHTML = "⚡ Тест 5000ms";
+            testBtn.className = "voice-ping-btn";
+            testBtn.innerHTML = `
+                <svg viewBox="0 0 24 24">
+                    <path d="M13 2L4 13.5h6V22l9-11.5h-6L13 2z"/>
+                </svg>
+                <span>Тест 5000ms</span>
+            `;
             testBtn.title = "Вызвать тестовый пинг 5000ms и проверить автопереподключение";
             testBtn.onclick = (e) => {
                 e.stopPropagation();
@@ -257,9 +259,15 @@ module.exports = class VoicePingAutoReconnect {
                 this.triggerReconnect("Тестовый скачок 5000ms");
             };
 
+            // Кнопка Реконнект с векторной иконкой синхронизации/повтора
             const reconnBtn = document.createElement("button");
-            reconnBtn.className = "voice-ping-btn voice-ping-reconn";
-            reconnBtn.innerHTML = "🔄 Реконнект";
+            reconnBtn.className = "voice-ping-btn";
+            reconnBtn.innerHTML = `
+                <svg viewBox="0 0 24 24">
+                    <path d="M17.65 6.35C16.2 4.9 14.21 4 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08c-.82 2.33-3.04 4-5.65 4-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/>
+                </svg>
+                <span>Реконнект</span>
+            `;
             reconnBtn.title = "Принудительно перезайти в канал";
             reconnBtn.onclick = (e) => {
                 e.stopPropagation();
@@ -269,8 +277,12 @@ module.exports = class VoicePingAutoReconnect {
             container.appendChild(testBtn);
             container.appendChild(reconnBtn);
 
-            const anchor = rtcStatus.closest('[class*="container_"]') || rtcStatus.parentElement;
-            anchor.appendChild(container);
+            if (actionButtons) {
+                actionButtons.parentElement.insertBefore(container, actionButtons.nextSibling);
+            } else {
+                const anchor = rtcStatus.closest('[class*="container_"]') || rtcStatus.parentElement;
+                anchor.appendChild(container);
+            }
         }
     }
 
