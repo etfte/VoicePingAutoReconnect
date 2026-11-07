@@ -1,8 +1,8 @@
 /**
  * @name VoicePingAutoReconnect
  * @author etfte
- * @version 2.0.0
- * @description Отображает реальный пинг каналов по нативной иконке в верхнем тулбаре на 30 секунд и перезаходит при обрывах (5000ms).
+ * @version 2.1.0
+ * @description Отображает реальный пинг каналов, перезаходит при обрывах (5000ms), и оптимизирует регион голосового канала для администраторов.
  */
 
 module.exports = class VoicePingAutoReconnect {
@@ -32,8 +32,8 @@ module.exports = class VoicePingAutoReconnect {
         this.startMonitor();
         this.startPeriodicUpdates();
         this.measureRealNetworkPing();
-        console.log("[VoicePing] v2.0.0: Кнопка перенесена в нативный тулбар.");
-        BdApi.UI.showToast("[VoicePing] v2.0.0 активен (нативный тулбар)!", { type: "success" });
+        console.log("[VoicePing] v2.1.0: Смена региона голосового канала и оптимизатор подключены.");
+        BdApi.UI.showToast("[VoicePing] v2.1.0 активен (Регионы + Пинг)!", { type: "success" });
     }
 
     stop() {
@@ -69,12 +69,14 @@ module.exports = class VoicePingAutoReconnect {
         this.VoiceStateStore = BdApi.Webpack.getStore("VoiceStateStore") || BdApi.Webpack.getByKeys("getVoiceStateForUser");
         this.UserStore = BdApi.Webpack.getStore("UserStore");
         this.ChannelStore = BdApi.Webpack.getStore("ChannelStore");
+        this.GuildStore = BdApi.Webpack.getStore("GuildStore");
+        this.ChannelPermissionStore = BdApi.Webpack.getStore("ChannelPermissionStore");
         this.RTCConnectionStore = BdApi.Webpack.getStore("RTCConnectionStore") || BdApi.Webpack.getByKeys("getRTCConnection");
+        this.HTTP = BdApi.Webpack.getByKeys("patch", "post", "get");
     }
 
     injectStyles() {
         BdApi.DOM.addStyle("voice-ping-autoreconnect-style", `
-            /* Нативная иконка в правом верхнем тулбаре Discord */
             .voice-ping-toolbar-btn {
                 width: 24px;
                 height: 24px;
@@ -117,7 +119,6 @@ module.exports = class VoicePingAutoReconnect {
                 pointer-events: none;
             }
 
-            /* Панель внизу у звонка */
             .voice-ping-header-controls {
                 display: inline-flex;
                 align-items: center;
@@ -148,6 +149,10 @@ module.exports = class VoicePingAutoReconnect {
                 color: #23a559 !important;
                 background-color: rgba(35, 165, 89, 0.2) !important;
             }
+            .voice-ping-icon-btn.region-btn:hover {
+                color: #5865f2;
+                background-color: rgba(88, 101, 242, 0.15);
+            }
             .voice-ping-icon-btn.test-btn:hover {
                 color: #f23f43;
                 background-color: rgba(242, 63, 67, 0.15);
@@ -163,7 +168,6 @@ module.exports = class VoicePingAutoReconnect {
                 flex-shrink: 0;
             }
 
-            /* Бейджи пинга у каналов */
             .voice-ping-channel-badge {
                 display: none !important;
                 align-items: center;
@@ -215,7 +219,6 @@ module.exports = class VoicePingAutoReconnect {
             const rtt = Math.round(performance.now() - start);
             if (rtt > 0) {
                 this.lastMeasuredRealPing = rtt;
-                console.log(`[VoicePing] Реальный сетевой пинг: ${rtt}ms`);
             }
         } catch (e) {
         } finally {
@@ -264,7 +267,6 @@ module.exports = class VoicePingAutoReconnect {
         return this.lastMeasuredRealPing || 0;
     }
 
-    // Включение показа пинга на 30 секунд
     async togglePingVisibility(seconds = 30) {
         const now = Date.now();
         if (this.pingVisibleUntil > now) {
@@ -303,7 +305,6 @@ module.exports = class VoicePingAutoReconnect {
     updateButtonLabels(remainingSeconds) {
         const isNowActive = remainingSeconds > 0;
 
-        // Обновление иконки в верхнем тулбаре
         document.querySelectorAll(".voice-ping-toolbar-btn").forEach(btn => {
             let counter = btn.querySelector(".voice-ping-toolbar-counter");
             if (isNowActive) {
@@ -322,7 +323,6 @@ module.exports = class VoicePingAutoReconnect {
             }
         });
 
-        // Обновление иконки в панели голосовой связи
         document.querySelectorAll(".voice-ping-toggle-btn").forEach(btn => {
             if (isNowActive) {
                 btn.classList.add("active");
@@ -370,6 +370,117 @@ module.exports = class VoicePingAutoReconnect {
             BdApi.UI.showToast("[VoicePing] ✅ Переподключено к каналу!", { type: "success" });
             this.isReconnecting = false;
         }, this.config.reconnectDelay);
+    }
+
+    // Проверка прав управления каналом (MANAGE_CHANNELS = 16n)
+    userCanManageChannel(channel) {
+        if (!channel) return false;
+        try {
+            if (this.ChannelPermissionStore?.can) {
+                // 16n = MANAGE_CHANNELS
+                return this.ChannelPermissionStore.can(16n, channel);
+            }
+        } catch (e) {}
+        return true; // Разрешаем отображение, если модуль недоступен
+    }
+
+    // Смена региона голосового канала через API
+    async switchChannelRegion(channelId, regionId) {
+        try {
+            if (this.HTTP?.patch) {
+                await this.HTTP.patch({
+                    url: `/channels/${channelId}`,
+                    body: { rtc_region: regionId === "automatic" ? null : regionId }
+                });
+            } else {
+                const token = BdApi.Webpack.getStore("AuthenticationStore")?.getToken?.() ||
+                              BdApi.Webpack.getByKeys("getToken")?.getToken?.();
+                await fetch(`https://discord.com/api/v9/channels/${channelId}`, {
+                    method: "PATCH",
+                    headers: {
+                        "Content-Type": "application/json",
+                        "Authorization": token
+                    },
+                    body: JSON.stringify({ rtc_region: regionId === "automatic" ? null : regionId })
+                });
+            }
+
+            const regionName = regionId === "automatic" ? "Автоматический" : regionId.toUpperCase();
+            BdApi.UI.showToast(`🌐 Регион канала изменён на: ${regionName}! Перезапуск сессии...`, { type: "success" });
+            
+            // Быстрый перезаход для мгновенного подхвата нового сервера
+            setTimeout(() => this.triggerReconnect("Смена региона голосового сервера"), 500);
+        } catch (err) {
+            console.error("[VoicePing] Ошибка смены региона:", err);
+            BdApi.UI.showToast("❌ Не удалось изменить регион (проверьте права доступа)", { type: "error" });
+        }
+    }
+
+    // Модальное окно оптимизации и выбора региона
+    openRegionOptimizerModal() {
+        const channelId = this.getCurrentVoiceChannelId();
+        if (!channelId) {
+            BdApi.UI.showToast("Сначала зайдите в голосовой канал!", { type: "warning" });
+            return;
+        }
+
+        const channel = this.ChannelStore?.getChannel(channelId);
+        const currentRegion = channel?.rtcRegion || "automatic";
+        const currentPing = this.getCurrentPing();
+
+        const regions = [
+            { id: "automatic", name: "Автоматически (Выбор Discord)", flag: "🌐" },
+            { id: "rotterdam", name: "Роттердам (Нидерланды)", flag: "🇳🇱" },
+            { id: "frankfurt", name: "Франкфурт (Германия)", flag: "🇩🇪" },
+            { id: "finland", name: "Финляндия", flag: "🇫🇮" },
+            { id: "stockholm", name: "Стокгольм (Швеция)", flag: "🇸🇪" },
+            { id: "warsaw", name: "Варшава (Польша)", flag: "🇵🇱" },
+            { id: "madrid", name: "Мадрид (Испания)", flag: "🇪🇸" },
+            { id: "russia", name: "Россия", flag: "🇷🇺" },
+            { id: "us-central", name: "США (Центр)", flag: "🇺🇸" },
+            { id: "us-east", name: "США (Восток)", flag: "🇺🇸" }
+        ];
+
+        let selectHtml = regions.map(r => `
+            <option value="${r.id}" ${r.id === currentRegion ? "selected" : ""}>
+                ${r.flag} ${r.name}
+            </option>
+        `).join("");
+
+        const content = document.createElement("div");
+        content.style.color = "var(--header-primary, #ffffff)";
+        content.style.fontSize = "14px";
+        content.style.lineHeight = "1.5";
+
+        content.innerHTML = `
+            <div style="margin-bottom: 14px; background: rgba(0,0,0,0.2); padding: 10px; border-radius: 6px;">
+                <div>Текущий канал: <b>${channel?.name || "Голосовой канал"}</b></div>
+                <div>Текущий регион: <b style="color:#5865f2;">${currentRegion.toUpperCase()}</b></div>
+                <div>Текущий пинг: <b style="color: ${currentPing > 150 ? '#f23f43' : '#23a559'};">${currentPing} ms</b></div>
+            </div>
+            <label style="display:block; margin-bottom: 6px; font-weight:600;">Выберите новый регион сервера:</label>
+            <select id="vp-region-select" style="width: 100%; padding: 8px 12px; background: var(--input-background, #1e1f22); color: #fff; border: 1px solid #444; border-radius: 6px; outline: none;">
+                ${selectHtml}
+            </select>
+            <p style="margin-top: 10px; font-size: 12px; color: var(--text-muted, #949ba4);">
+                💡 <b>Совет:</b> Если пинг > 200 ms, часто помогает смена между <b>Frankfurt</b> и <b>Rotterdam</b>. Смена применится для всех участников в канале.
+            </p>
+        `;
+
+        BdApi.UI.showConfirmationModal(
+            "🌐 Оптимизация региона канала",
+            content,
+            {
+                confirmText: "Применить регион",
+                cancelText: "Отмена",
+                onConfirm: () => {
+                    const sel = content.querySelector("#vp-region-select");
+                    if (sel && sel.value) {
+                        this.switchChannelRegion(channelId, sel.value);
+                    }
+                }
+            }
+        );
     }
 
     patchChannelItem() {
@@ -506,7 +617,6 @@ module.exports = class VoicePingAutoReconnect {
         });
     }
 
-    // Встраивание кнопки в верхний правый тулбар Discord (где закрепы, колокольчик, поиск)
     injectToolbarButton() {
         const toolbar = document.querySelector('section[class*="title_"] [class*="toolbar_"], [class*="toolbar_"]');
         if (!toolbar) return;
@@ -528,7 +638,6 @@ module.exports = class VoicePingAutoReconnect {
             this.togglePingVisibility(this.config.displayDurationSec);
         };
 
-        // Вставляем первой иконкой в тулбаре
         toolbar.insertBefore(btn, toolbar.firstChild);
     }
 
@@ -551,6 +660,27 @@ module.exports = class VoicePingAutoReconnect {
         const container = document.createElement("div");
         container.className = "voice-ping-header-controls";
 
+        // 1. Иконка смены/оптимизации региона канала (Глобус)
+        const channel = this.ChannelStore?.getChannel(inVoice);
+        const canManage = this.userCanManageChannel(channel);
+
+        if (canManage) {
+            const regionBtn = document.createElement("button");
+            regionBtn.className = "voice-ping-icon-btn region-btn";
+            regionBtn.title = "Оптимизировать регион голосового канала (сменить сервер)";
+            regionBtn.innerHTML = `
+                <svg viewBox="0 0 24 24">
+                    <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z"/>
+                </svg>
+            `;
+            regionBtn.onclick = (e) => {
+                e.stopPropagation();
+                this.openRegionOptimizerModal();
+            };
+            container.appendChild(regionBtn);
+        }
+
+        // 2. Иконка показа пинга (Антенна)
         const pingToggleBtn = document.createElement("button");
         pingToggleBtn.className = "voice-ping-icon-btn voice-ping-toggle-btn";
         pingToggleBtn.title = "Показать реальный пинг каналов на 30 секунд";
@@ -563,7 +693,9 @@ module.exports = class VoicePingAutoReconnect {
             e.stopPropagation();
             this.togglePingVisibility(this.config.displayDurationSec);
         };
+        container.appendChild(pingToggleBtn);
 
+        // 3. Тест 5000ms (Молния)
         const testBtn = document.createElement("button");
         testBtn.className = "voice-ping-icon-btn test-btn";
         testBtn.title = "Тест: передать датчику 5200ms пинга и проверить реакцию монитора";
@@ -577,7 +709,9 @@ module.exports = class VoicePingAutoReconnect {
             this.simulatedPing = 5240;
             BdApi.UI.showToast("⚡ [Тест] Значение пинга изменено на 5240ms. Ожидание детектора...", { type: "info" });
         };
+        container.appendChild(testBtn);
 
+        // 4. Ручной реконнект (Стрелки)
         const reconnBtn = document.createElement("button");
         reconnBtn.className = "voice-ping-icon-btn reconn-btn";
         reconnBtn.title = "Ручной перезаход в канал";
@@ -590,9 +724,6 @@ module.exports = class VoicePingAutoReconnect {
             e.stopPropagation();
             this.triggerReconnect("Ручной клик пользователя");
         };
-
-        container.appendChild(pingToggleBtn);
-        container.appendChild(testBtn);
         container.appendChild(reconnBtn);
 
         if (disconnectBtn && disconnectBtn.parentElement) {
@@ -620,7 +751,7 @@ module.exports = class VoicePingAutoReconnect {
                 <label style="display:block; margin-bottom: 6px; font-weight:600;">Длительность показа пинга каналов (сек):</label>
                 <input type="number" id="vp-duration" value="${this.config.displayDurationSec}" style="background:var(--input-background, #1e1f22); color:#fff; border:1px solid #444; border-radius:4px; padding:6px 10px; width:120px;" />
             </div>
-            <p style="font-size:12px; color:var(--text-muted, #949ba4);">При нажатии кнопки «Пинг» задержка каналов отображается на указанное время, затем плавно скрывается.</p>
+            <p style="font-size:12px; color:var(--text-muted, #949ba4);">Когда пинг превышает порог, плагин мгновенно перезаходит в канал. При клике на иконку глобуса модераторы могут менять регион сервера.</p>
         `;
 
         panel.querySelector("#vp-threshold").addEventListener("change", (e) => {
