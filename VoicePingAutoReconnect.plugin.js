@@ -1,7 +1,7 @@
 /**
  * @name VoicePingAutoReconnect
  * @author etfte
- * @version 2.1.0
+ * @version 2.1.1
  * @description Отображает реальный пинг каналов, перезаходит при обрывах (5000ms), и оптимизирует регион голосового канала для администраторов.
  */
 
@@ -32,8 +32,8 @@ module.exports = class VoicePingAutoReconnect {
         this.startMonitor();
         this.startPeriodicUpdates();
         this.measureRealNetworkPing();
-        console.log("[VoicePing] v2.1.0: Смена региона голосового канала и оптимизатор подключены.");
-        BdApi.UI.showToast("[VoicePing] v2.1.0 активен (Регионы + Пинг)!", { type: "success" });
+        console.log("[VoicePing] v2.1.1: React модальное окно оптимизации региона активно.");
+        BdApi.UI.showToast("[VoicePing] v2.1.1 активен!", { type: "success" });
     }
 
     stop() {
@@ -372,51 +372,61 @@ module.exports = class VoicePingAutoReconnect {
         }, this.config.reconnectDelay);
     }
 
-    // Проверка прав управления каналом (MANAGE_CHANNELS = 16n)
     userCanManageChannel(channel) {
         if (!channel) return false;
         try {
             if (this.ChannelPermissionStore?.can) {
-                // 16n = MANAGE_CHANNELS
                 return this.ChannelPermissionStore.can(16n, channel);
             }
         } catch (e) {}
-        return true; // Разрешаем отображение, если модуль недоступен
+        return true;
     }
 
-    // Смена региона голосового канала через API
     async switchChannelRegion(channelId, regionId) {
         try {
+            const targetRegion = regionId === "automatic" ? null : regionId;
+            let success = false;
+
             if (this.HTTP?.patch) {
-                await this.HTTP.patch({
-                    url: `/channels/${channelId}`,
-                    body: { rtc_region: regionId === "automatic" ? null : regionId }
-                });
-            } else {
+                try {
+                    await this.HTTP.patch({
+                        url: `/channels/${channelId}`,
+                        body: { rtc_region: targetRegion }
+                    });
+                    success = true;
+                } catch (e) {
+                    console.log("[VoicePing] HTTP.patch failed, trying fetch fallback...");
+                }
+            }
+
+            if (!success) {
                 const token = BdApi.Webpack.getStore("AuthenticationStore")?.getToken?.() ||
                               BdApi.Webpack.getByKeys("getToken")?.getToken?.();
-                await fetch(`https://discord.com/api/v9/channels/${channelId}`, {
+                const res = await fetch(`https://discord.com/api/v9/channels/${channelId}`, {
                     method: "PATCH",
                     headers: {
                         "Content-Type": "application/json",
                         "Authorization": token
                     },
-                    body: JSON.stringify({ rtc_region: regionId === "automatic" ? null : regionId })
+                    body: JSON.stringify({ rtc_region: targetRegion })
                 });
+                if (res.ok) success = true;
             }
 
             const regionName = regionId === "automatic" ? "Автоматический" : regionId.toUpperCase();
-            BdApi.UI.showToast(`🌐 Регион канала изменён на: ${regionName}! Перезапуск сессии...`, { type: "success" });
-            
-            // Быстрый перезаход для мгновенного подхвата нового сервера
-            setTimeout(() => this.triggerReconnect("Смена региона голосового сервера"), 500);
+            if (success) {
+                BdApi.UI.showToast(`🌐 Регион канала изменён на: ${regionName}!`, { type: "success" });
+                setTimeout(() => this.triggerReconnect("Смена региона голосового сервера"), 500);
+            } else {
+                BdApi.UI.showToast("❌ Ошибка: проверьте права (нужно 'Управление каналом')", { type: "error" });
+            }
         } catch (err) {
             console.error("[VoicePing] Ошибка смены региона:", err);
-            BdApi.UI.showToast("❌ Не удалось изменить регион (проверьте права доступа)", { type: "error" });
+            BdApi.UI.showToast("❌ Не удалось изменить регион (проверьте права)", { type: "error" });
         }
     }
 
-    // Модальное окно оптимизации и выбора региона
+    // Чистое React модальное окно без вылета "unexpected Error"
     openRegionOptimizerModal() {
         const channelId = this.getCurrentVoiceChannelId();
         if (!channelId) {
@@ -429,43 +439,89 @@ module.exports = class VoicePingAutoReconnect {
         const currentPing = this.getCurrentPing();
 
         const regions = [
-            { id: "automatic", name: "Автоматически (Выбор Discord)", flag: "🌐" },
-            { id: "rotterdam", name: "Роттердам (Нидерланды)", flag: "🇳🇱" },
-            { id: "frankfurt", name: "Франкфурт (Германия)", flag: "🇩🇪" },
-            { id: "finland", name: "Финляндия", flag: "🇫🇮" },
-            { id: "stockholm", name: "Стокгольм (Швеция)", flag: "🇸🇪" },
-            { id: "warsaw", name: "Варшава (Польша)", flag: "🇵🇱" },
-            { id: "madrid", name: "Мадрид (Испания)", flag: "🇪🇸" },
-            { id: "russia", name: "Россия", flag: "🇷🇺" },
-            { id: "us-central", name: "США (Центр)", flag: "🇺🇸" },
-            { id: "us-east", name: "США (Восток)", flag: "🇺🇸" }
+            { id: "automatic", name: "🌐 Автоматически (Выбор Discord)" },
+            { id: "rotterdam", name: "🇳🇱 Роттердам (Нидерланды)" },
+            { id: "frankfurt", name: "🇩🇪 Франкфурт (Германия)" },
+            { id: "finland", name: "🇫🇮 Финляндия" },
+            { id: "stockholm", name: "🇸🇪 Стокгольм (Швеция)" },
+            { id: "warsaw", name: "🇵🇱 Варшава (Польша)" },
+            { id: "madrid", name: "🇪🇸 Мадрид (Испания)" },
+            { id: "russia", name: "🇷🇺 Россия" },
+            { id: "us-central", name: "🇺🇸 США (Центр)" },
+            { id: "us-east", name: "🇺🇸 США (Восток)" }
         ];
 
-        let selectHtml = regions.map(r => `
-            <option value="${r.id}" ${r.id === currentRegion ? "selected" : ""}>
-                ${r.flag} ${r.name}
-            </option>
-        `).join("");
+        let selectedRegion = currentRegion;
+        const React = BdApi.React;
 
-        const content = document.createElement("div");
-        content.style.color = "var(--header-primary, #ffffff)";
-        content.style.fontSize = "14px";
-        content.style.lineHeight = "1.5";
-
-        content.innerHTML = `
-            <div style="margin-bottom: 14px; background: rgba(0,0,0,0.2); padding: 10px; border-radius: 6px;">
-                <div>Текущий канал: <b>${channel?.name || "Голосовой канал"}</b></div>
-                <div>Текущий регион: <b style="color:#5865f2;">${currentRegion.toUpperCase()}</b></div>
-                <div>Текущий пинг: <b style="color: ${currentPing > 150 ? '#f23f43' : '#23a559'};">${currentPing} ms</b></div>
-            </div>
-            <label style="display:block; margin-bottom: 6px; font-weight:600;">Выберите новый регион сервера:</label>
-            <select id="vp-region-select" style="width: 100%; padding: 8px 12px; background: var(--input-background, #1e1f22); color: #fff; border: 1px solid #444; border-radius: 6px; outline: none;">
-                ${selectHtml}
-            </select>
-            <p style="margin-top: 10px; font-size: 12px; color: var(--text-muted, #949ba4);">
-                💡 <b>Совет:</b> Если пинг > 200 ms, часто помогает смена между <b>Frankfurt</b> и <b>Rotterdam</b>. Смена применится для всех участников в канале.
-            </p>
-        `;
+        // Создаем валидный React элемент
+        const content = React.createElement("div", {
+            style: { color: "var(--header-primary, #ffffff)", fontSize: "14px", lineHeight: "1.5" }
+        }, [
+            React.createElement("div", {
+                key: "info-box",
+                style: {
+                    marginBottom: "14px",
+                    background: "rgba(0, 0, 0, 0.25)",
+                    padding: "10px 14px",
+                    borderRadius: "6px",
+                    border: "1px solid rgba(255, 255, 255, 0.05)"
+                }
+            }, [
+                React.createElement("div", { key: "ch-name" }, [
+                    "Текущий канал: ",
+                    React.createElement("b", { key: "b1" }, channel?.name || "Голосовой канал")
+                ]),
+                React.createElement("div", { key: "ch-region", style: { marginTop: "4px" } }, [
+                    "Текущий регион: ",
+                    React.createElement("b", { key: "b2", style: { color: "#5865f2" } }, currentRegion.toUpperCase())
+                ]),
+                React.createElement("div", { key: "ch-ping", style: { marginTop: "4px" } }, [
+                    "Текущий пинг: ",
+                    React.createElement("b", {
+                        key: "b3",
+                        style: { color: currentPing > 150 ? "#f23f43" : "#23a559" }
+                    }, `${currentPing} ms`)
+                ])
+            ]),
+            React.createElement("label", {
+                key: "label",
+                style: {
+                    display: "block",
+                    marginBottom: "6px",
+                    fontWeight: "600",
+                    fontSize: "12px",
+                    textTransform: "uppercase",
+                    color: "var(--header-secondary, #b5bac1)"
+                }
+            }, "Выберите новый регион сервера:"),
+            React.createElement("select", {
+                key: "select",
+                defaultValue: currentRegion,
+                onChange: (e) => {
+                    selectedRegion = e.target.value;
+                },
+                style: {
+                    width: "100%",
+                    padding: "10px 12px",
+                    background: "var(--input-background, #1e1f22)",
+                    color: "#ffffff",
+                    border: "1px solid rgba(255, 255, 255, 0.15)",
+                    borderRadius: "6px",
+                    fontSize: "14px",
+                    outline: "none",
+                    cursor: "pointer"
+                }
+            }, regions.map(r => React.createElement("option", {
+                key: r.id,
+                value: r.id,
+                style: { background: "#2b2d31", color: "#ffffff" }
+            }, r.name))),
+            React.createElement("p", {
+                key: "tip",
+                style: { marginTop: "12px", fontSize: "12px", color: "var(--text-muted, #949ba4)" }
+            }, "💡 Смена региона применится для всех участников в канале и перезапустит связь за долю секунды.")
+        ]);
 
         BdApi.UI.showConfirmationModal(
             "🌐 Оптимизация региона канала",
@@ -474,10 +530,7 @@ module.exports = class VoicePingAutoReconnect {
                 confirmText: "Применить регион",
                 cancelText: "Отмена",
                 onConfirm: () => {
-                    const sel = content.querySelector("#vp-region-select");
-                    if (sel && sel.value) {
-                        this.switchChannelRegion(channelId, sel.value);
-                    }
+                    this.switchChannelRegion(channelId, selectedRegion);
                 }
             }
         );
@@ -660,7 +713,6 @@ module.exports = class VoicePingAutoReconnect {
         const container = document.createElement("div");
         container.className = "voice-ping-header-controls";
 
-        // 1. Иконка смены/оптимизации региона канала (Глобус)
         const channel = this.ChannelStore?.getChannel(inVoice);
         const canManage = this.userCanManageChannel(channel);
 
@@ -680,7 +732,6 @@ module.exports = class VoicePingAutoReconnect {
             container.appendChild(regionBtn);
         }
 
-        // 2. Иконка показа пинга (Антенна)
         const pingToggleBtn = document.createElement("button");
         pingToggleBtn.className = "voice-ping-icon-btn voice-ping-toggle-btn";
         pingToggleBtn.title = "Показать реальный пинг каналов на 30 секунд";
@@ -695,7 +746,6 @@ module.exports = class VoicePingAutoReconnect {
         };
         container.appendChild(pingToggleBtn);
 
-        // 3. Тест 5000ms (Молния)
         const testBtn = document.createElement("button");
         testBtn.className = "voice-ping-icon-btn test-btn";
         testBtn.title = "Тест: передать датчику 5200ms пинга и проверить реакцию монитора";
@@ -711,7 +761,6 @@ module.exports = class VoicePingAutoReconnect {
         };
         container.appendChild(testBtn);
 
-        // 4. Ручной реконнект (Стрелки)
         const reconnBtn = document.createElement("button");
         reconnBtn.className = "voice-ping-icon-btn reconn-btn";
         reconnBtn.title = "Ручной перезаход в канал";
